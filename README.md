@@ -1,189 +1,89 @@
-<h1 align="center">
-  <br>
-  <a href="https://getmythic.app">
-    <img src="https://github.com/user-attachments/assets/94185745-dbf2-4449-b281-438decf2c5c7" 
-      style="width: 20%; height: 20%;">
-  </a>
+# Mythic Engine with `EnableMouseInPointer` support (Civilization VI mouse fix)
 
-  Mythic Engine
+A fork of [MythicApp/wine](https://github.com/MythicApp/wine) (the Wine source behind
+[Mythic](https://getmythic.app), CrossOver-derived, for running Windows games on macOS)
+with a small patch that makes mouse input work in games that use the Windows **Pointer
+Input API**.
 
-  ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/MythicApp/Mythic/build.yml)
-  [![Discord](https://img.shields.io/discord/1154998702650425397?color=5865F2)](https://discord.com/invite/58NZ7fFqPy)
-</h1>
+## The symptom
 
-Mythic Engine is [Mythic](https://github.com/MythicApp/Mythic)'s implementation of Apple's [Game Porting Toolkit (GPTK)](https://developer.apple.com/games/game-porting-toolkit/), based on [CodeWeavers CrossOver 24](https://www.codeweavers.com/crossover/), which uses [wine](https://www.winehq.org/) API translation technology to allow Windows® executables to run on macOS devices.
+You launch the game through Mythic. It starts, the cursor moves, the keyboard works,
+and clicking anywhere triggers "click-anywhere" actions (skipping an intro video, for
+example) — but **buttons never highlight on hover and clicks never register on them.**
+In Civilization VI this means you are stuck on the intro screen: the `Continue` button
+does nothing, no matter where on the screen you click.
 
-Mythic Engine utilises a variety of API translators, such as D3DMetal, DXVK, and DXMT, to create an effective yet user-friendly Windows® gaming experience on macOS.
+## The cause
 
----
+Civilization VI calls [`EnableMouseInPointer`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enablemouseinpointer)
+and from then on listens for `WM_POINTER*` messages instead of the classic
+`WM_MOUSEMOVE` / `WM_LBUTTONDOWN` ones.
 
-## INTRODUCTION
+Wine does not implement this. In Mythic's engine, `NtUserEnableMouseInPointer`
+(`dlls/win32u/input.c`) is a stub that fails with `ERROR_CALL_NOT_IMPLEMENTED`, and
+`WM_POINTERUPDATE` is never sent anywhere. So the game's UI receives no pointer
+position and no clicks — while anything still wired to ordinary mouse messages keeps
+working, which is why the intro video can be skipped but the button cannot be pressed.
 
-Wine is a program which allows running Microsoft Windows programs
-(including DOS, Windows 3.x, Win32, and Win64 executables) on Unix.
-It consists of a program loader which loads and executes a Microsoft
-Windows binary, and a library (called Winelib) that implements Windows
-API calls using their Unix, X11 or Mac equivalents.  The library may also
-be used for porting Windows code into native Unix executables.
+This is **not** a resolution, window focus, Retina, or macOS Game Mode problem. Those
+are the usual suspects and none of them are responsible.
 
-Wine is free software, released under the GNU LGPL; see the file
-LICENSE for the details.
+## The fix
 
+Valve solved this in Proton. This branch applies the same idea to Mythic's tree, in two
+files:
 
-## QUICK START
+- `dlls/win32u/input.c` — `NtUserEnableMouseInPointer` records the flag and returns
+  `TRUE`; `NtUserIsMouseInPointerEnabled` reports it back.
+- `dlls/win32u/message.c` — in `process_mouse_message`, ordinary mouse messages also
+  emit the matching `WM_POINTERUPDATE` / `WM_POINTERWHEEL` / `WM_POINTERHWHEEL`.
 
-From the top-level directory of the Wine source (which contains this file),
-run:
+No header changes are needed: the required constants already exist in
+`include/winuser.rh`.
 
-```
-./configure
-make
-```
+### Scope, honestly
 
-Then either install Wine:
+This is a **rudimentary implementation** — a semi-stub. It synthesises pointer messages
+from mouse messages. It does *not* implement the rest of the pointer API
+(`GetPointerInfo`, touch/pen input, separate `WM_POINTERDOWN`/`WM_POINTERUP`, device
+enumeration). Applications that genuinely need those will still not work.
 
-```
-make install
-```
+- **Verified:** Sid Meier's Civilization VI (Epic build) — clicking works.
+- **Expected but untested:** other titles hitting the same wall. The bug is widely
+  reported for **Unity games**, which call the same API. Civilization VI is not Unity,
+  so at least two different engines are affected.
 
-Or run Wine directly from the build directory:
+## Installing a build
 
-```
-./wine notepad
-```
+The GitHub Actions workflow produces an `Engine` artifact — a complete Mythic Engine,
+including GPTK/D3DMetal.
 
-Run programs as `wine program`. For more information and problem
-resolution, read the rest of this file, the Wine man page, and
-especially the wealth of information found at https://www.winehq.org.
+```sh
+# quit Mythic and any running game first
+ENGINE=~/Library/"Application Support"/Mythic/Engine
 
+cp -a "$ENGINE" "$ENGINE.backup"          # keep a way back
+rm -rf "$ENGINE" && mkdir -p "$ENGINE"
+tar -xf Engine.tar.xz -C "$ENGINE"
 
-## REQUIREMENTS
-
-To compile and run Wine, you must have one of the following:
-
-- Linux version 2.0.36 or later
-- FreeBSD 12.4 or later
-- Solaris x86 9 or later
-- NetBSD-current
-- Mac OS X 10.8 or later
-
-As Wine requires kernel-level thread support to run, only the operating
-systems mentioned above are supported.  Other operating systems which
-support kernel threads may be supported in the future.
-
-**FreeBSD info**:
-  See https://wiki.freebsd.org/Wine for more information.
-
-**Solaris info**:
-  You will most likely need to build Wine with the GNU toolchain
-  (gcc, gas, etc.). Warning : installing gas does *not* ensure that it
-  will be used by gcc. Recompiling gcc after installing gas or
-  symlinking cc, as and ld to the gnu tools is said to be necessary.
-
-**NetBSD info**:
-  Make sure you have the USER_LDT, SYSVSHM, SYSVSEM, and SYSVMSG options
-  turned on in your kernel.
-
-**Mac OS X info**:
-  You need Xcode/Xcode Command Line Tools or Apple cctools.  The
-  minimum requirements for compiling Wine are clang 3.8 with the
-  MacOSX10.10.sdk and mingw-w64 v8.  The MacOSX10.14.sdk and later can
-  only build wine64.
-
-**Supported file systems**:
-  Wine should run on most file systems. A few compatibility problems
-  have also been reported using files accessed through Samba. Also,
-  NTFS does not provide all the file system features needed by some
-  applications.  Using a native Unix file system is recommended.
-
-**Basic requirements**:
-  You need to have the X11 development include files installed
-  (called xorg-dev in Debian and libX11-devel in Red Hat).
-  Of course you also need make (most likely GNU make).
-  You also need flex version 2.5.33 or later and bison.
-
-**Optional support libraries**:
-  Configure will display notices when optional libraries are not found
-  on your system. See https://wiki.winehq.org/Recommended_Packages for
-  hints about the packages you should install. On 64-bit platforms,
-  you have to make sure to install the 32-bit versions of these
-  libraries.
-
-
-## COMPILATION
-
-To build Wine, do:
-
-```
-./configure
-make
+# the build does not produce these two; carry them over
+cp -a "$ENGINE.backup/verbs.txt" "$ENGINE.backup/winetricks" "$ENGINE"
 ```
 
-This will build the program "wine" and numerous support libraries/binaries.
-The program "wine" will load and run Windows executables.
-The library "libwine" ("Winelib") can be used to compile and link
-Windows source code under Unix.
+Two things worth knowing before you do this:
 
-To see compile configuration options, do `./configure --help`.
+- This branch builds **Mythic Engine 3.0.0 (wine-9.0)**, which is ahead of the released
+  2.6.1 (wine-7.7). It is not a Mythic release build.
+- wine-9.0 will **upgrade your existing wine prefix, and that is one-way.** Back up
+  `~/Library/Containers/xyz.blackxfiied.Mythic/Containers/Default` first if you might
+  want to go back.
 
-For more information, see https://wiki.winehq.org/Building_Wine
+## Credits
 
+- The original fix is Valve's, from Proton.
+- Adapted to Wine 7.7 / Whisky by [IdyllicHappiness](https://github.com/IdyllicHappiness)
+  in [Whisky issue #1169](https://github.com/Whisky-App/Whisky/issues/1169); that fork's
+  build artifacts have long expired, which is why this exists.
+- Upstream engine and build recipe: [MythicApp/wine](https://github.com/MythicApp/wine).
 
-## SETUP
-
-Once Wine has been built correctly, you can do `make install`; this
-will install the wine executable and libraries, the Wine man page, and
-other needed files.
-
-Don't forget to uninstall any conflicting previous Wine installation
-first.  Try either `dpkg -r wine` or `rpm -e wine` or `make uninstall`
-before installing.
-
-Once installed, you can run the `winecfg` configuration tool. See the
-Support area at https://www.winehq.org/ for configuration hints.
-
-
-## RUNNING PROGRAMS
-
-When invoking Wine, you may specify the entire path to the executable,
-or a filename only.
-
-For example, to run Notepad:
-
-```
-wine notepad            (using the search Path as specified in
-wine notepad.exe         the registry to locate the file)
-
-wine c:\\windows\\notepad.exe      (using DOS filename syntax)
-
-wine ~/.wine/drive_c/windows/notepad.exe  (using Unix filename syntax)
-
-wine notepad.exe readme.txt          (calling program with parameters)
-```
-
-Wine is not perfect, so some programs may crash. If that happens you
-will get a crash log that you should attach to your report when filing
-a bug.
-
-
-## GETTING MORE INFORMATION
-
-- **WWW**: A great deal of information about Wine is available from WineHQ at
-	https://www.winehq.org/ : various Wine Guides, application database,
-	bug tracking. This is probably the best starting point.
-
-- **FAQ**: The Wine FAQ is located at https://www.winehq.org/FAQ
-
-- **Wiki**: The Wine Wiki is located at https://wiki.winehq.org
-
-- **Gitlab**: Wine development is hosted at https://gitlab.winehq.org
-
-- **Mailing lists**:
-	There are several mailing lists for Wine users and developers;
-	see https://www.winehq.org/forums for more information.
-
-- **Bugs**: Report bugs to Wine Bugzilla at https://bugs.winehq.org
-	Please search the bugzilla database to check whether your
-	problem is already known or fixed before posting a bug report.
-
-- **IRC**: Online help is available at channel `#WineHQ` on irc.libera.chat.
+Wine is licensed under the LGPL; see [`LICENSE`](LICENSE) and [`COPYING.LIB`](COPYING.LIB).
