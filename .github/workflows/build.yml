@@ -21,12 +21,12 @@ env:
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Xcode 15
-        run: sudo xcode-select -switch /Applications/Xcode_15.2.app/Contents/Developer
+      - name: Use Xcode 16.0
+        run: sudo xcode-select -switch /Applications/Xcode_16.0.app/Contents/Developer
 
       - name: Install Homebrew Packages
         continue-on-error: true
@@ -60,6 +60,7 @@ jobs:
           rm mingw-w64.rb
 
       - name: Echo Libs [DEBUG]
+        continue-on-error: true
         run: |
           echo "Brew Libs"
           ls $(brew --prefix)/lib
